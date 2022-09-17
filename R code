@@ -1,0 +1,354 @@
+#Install/Load the relevant libraries
+library(readxl)
+library(corrplot)
+library(ISLR2)
+library(leaps)
+library(lubridate)
+library(caret)
+library(tidyverse)
+library(data.table)
+
+#loading the data set
+dataset <- read_excel("real_estate.xlsx")
+
+#extracting the summary in a table format
+summarydataset <- dataset %>% 
+  summary %>% 
+  as.data.frame %>% 
+  separate(Freq, into = c("name", "value"),sep = ":") %>% 
+  pivot_wider(id_cols = "name", names_from = "Var2", values_from = "value") %>% 
+  filter(!str_detect(name,"Qu."))
+
+
+#deleting the no. variable since it is not relevant for prediction
+datasetlasso <- subset(dataset, select = -c(No))
+
+View(datasetlasso)
+
+#rename the columns 
+
+colnames(datasetlasso)[colnames(datasetlasso) == "X1 transaction date"] <- "x1_transaction_date"
+colnames(datasetlasso)[colnames(datasetlasso) == "X2 house age"] <- "x2_house_age"
+colnames(datasetlasso)[colnames(datasetlasso) == "X3 distance to the nearest MRT station"] <- "x3_distance_mrt"
+colnames(datasetlasso)[colnames(datasetlasso) == "X4 number of convenience stores"] <- "x4_conv_stores"
+colnames(datasetlasso)[colnames(datasetlasso) == "X5 latitude"] <- "x5_lat"
+colnames(datasetlasso)[colnames(datasetlasso) == "X6 longitude"] <- "x6_long"
+colnames(datasetlasso)[colnames(datasetlasso) == "Y house price of unit area"] <- "y_price"
+
+#look for missing values
+
+colSums(is.na(datasetlasso)) #no missing values found
+
+
+#exploratory analysis
+
+#outlier detection
+hist(datasetlasso$x1_transaction_date, labels = TRUE, main = "Transaction date", xlab = "Transaction date")
+hist(datasetlasso$x2_house_age, labels=TRUE, main = "House Age", xlab = "House Age")
+hist(datasetlasso$x3_distance_mrt, labels = TRUE, main = "Distance to the nearest MRT station", xlab = "Distance to the nearest MRT Station in meters")
+hist(datasetlasso$x4_conv_stores, labels = TRUE, main = "number of convenience stores", xlab = "number of convenience stores in living circle on foot")
+hist(datasetlasso$x5_lat, labels = TRUE, main = "latitude", xlab = "latitude")
+hist(datasetlasso$x6_long, labels = TRUE, main = "longitude", xlab = "longitude")
+hist(datasetlasso$y_price, labels = TRUE, main = "House Price/unit area", xlab = "House price/unit area")
+
+
+#in the dependent variable, i.e. y_price, there is only one house that is above 100/sqfeet and one below 10. Hence we will remove that 
+
+datasetlasso$y_price[datasetlasso$y_price > 100] <- NA #remove houses with price above 100
+datasetlasso$y_price[datasetlasso$y_price < 10] <- NA
+
+#removing the house with NA value
+
+datasetlasso <- na.omit(datasetlasso)
+
+summary(datasetlasso)
+#the revised data set has 412 observations
+
+
+#correlation matrix
+dataset.cor = cor(datasetlasso)
+corrplot(dataset.cor)
+
+dataset.cor
+
+#### LASSO REGRESSION MODEL
+
+#set seed
+set.seed(1992)
+
+#partition the data
+index <- createDataPartition(datasetlasso$y_price, p=0.8, list = FALSE, times = 1)
+
+
+#create train and test
+train <- datasetlasso[index,]
+test <- datasetlasso[-index,]
+
+
+#k fold cross validation (10 fold cross fold validation)
+
+#10 fold cross validation as training method
+ctrlspec <- trainControl(method="cv", number = 10,
+                         savePredictions = "all")
+
+
+#### Specify and train Lasso Regression model
+
+#create a vector for lambda values
+
+lambda_vector <- 10^seq(5, -5, length=500)
+
+#setseed
+set.seed(1992)
+
+#Specify the Lasso  regression model using training data and 10 fold cross validation
+
+
+
+model1 <- train(y_price ~ .,
+                data = train,
+                preProcess=c("center", "scale"),#preprocess the predictor variable to scale them 
+                method="glmnet",
+                tuneGrid=expand.grid(alpha=1, lambda = lambda_vector),
+                trainControl=ctrlspec, na.action=na.omit) #train control to specify our 10 fold cross validation function 
+
+
+#best lambda value
+
+model1$bestTune$lambda
+
+
+#lasso regression model coefficients (parameter estimates)
+
+round(coef(model1$finalModel, model1$bestTune$lambda), 3)
+
+
+#plot log lambda and RMSE
+
+plot(log(model1$results$lambda), 
+     model1$results$RMSE,
+     xlab = "log lambda",
+     ylab = "RMSE",
+     xlim = c(-2,3))
+
+
+#variable importance
+varImp(model1)
+
+
+#visualizing varaible improtance
+
+library(ggplot2)
+ggplot(varImp(model1))
+
+
+### model prediction
+
+predictionlasso <- predict(model1, newdata=test)
+
+plot(x=predictionlasso, y=test$y_price)
+abline(a=0, b=1)
+
+
+# Model Performance/Accuracy
+
+model1performance <- data.frame(RMSE=RMSE(predictionlasso, test$y_price),
+                                Rsquared=R2(predictionlasso, test$y_price))
+
+model1performance
+
+
+
+##### Ridge Regression
+
+
+
+#setseed
+set.seed(1992)
+
+#Specify the ridge  regression model using training data and 10 fold cross validation
+
+
+
+model_ridge <- train(y_price ~ .,
+                data = train,
+                preProcess=c("center", "scale"),#preprocess the predictor variable to scale them 
+                method="glmnet",
+                tuneGrid=expand.grid(alpha=0, lambda = lambda_vector), #alpha value is 0 for ridge
+                trainControl=ctrlspec, na.action=na.omit) #train control to specify our 10 fold cross validation function 
+
+
+
+#best lambda value
+
+model_ridge$bestTune$lambda
+
+
+#lasso regression model coefficients (parameter estimates)
+
+round(coef(model_ridge$finalModel, model_ridge$bestTune$lambda), 3)
+
+
+#plot log lambda and RMSE
+
+plot(log(model_ridge$results$lambda), 
+     model_ridge$results$RMSE,
+     xlab = "log lambda",
+     ylab = "RMSE",
+     xlim = c(-0,9))
+
+
+#variable importance
+varImp(model_ridge)
+
+
+#visualizing varaible improtance
+
+library(ggplot2)
+ggplot(varImp(model_ridge))
+
+
+### model prediction
+
+predictionridge <- predict(model_ridge, newdata=test)
+
+# RIDGE Regression Model Performance/Accuracy
+
+model_ridgeperformance <- data.frame(RMSE=RMSE(predictionridge, test$y_price),
+                                Rsquared=R2(predictionridge, test$y_price))
+
+model_ridgeperformance
+
+plot(x=predictionridge, y=test$y_price)
+abline(a=0, b=1)
+
+
+
+### OLS Linear Regression Model
+
+#setseed
+set.seed(1992)
+
+#Specify the lasso regression model using training data and 10 fold cross validation
+
+
+
+model_lm <- train(y_price ~ .,
+                data = train,
+                preProcess=c("center", "scale"),#preprocess the predictor variable to scale them 
+                method="lm",
+                trainControl=ctrlspec, na.action=na.omit) #train control to specify our 10 fold cross validation function 
+
+print(model_lm)
+
+plot(model_lm$finalModel)
+
+
+
+round(coef(model_ridge$finalModel, model_ridge$bestTune$lambda), 3)
+
+
+#vif value
+library(car)
+vif(model_lm$finalModel)
+
+# Predict outcome using test data set
+
+predictionlm <- predict(model_lm, newdata = test)
+
+plot(x=predictionlm, y=test$y_price)
+abline(a=0, b=1)
+
+#model performance
+
+model_lmperformance <- data.frame(RMSE=RMSE(predictionlm, test$y_price),
+                                  Rsquared=R2(predictionlm, test$y_price))
+
+print(model_lmperformance)
+
+#variable importance of OLS MLR model
+varImp(model_lm)
+
+ggplot(varImp(model_lm))
+
+
+#####GRADIENT BOOSTED MACHINE REGRESSION
+
+# for reproducibility
+set.seed(1992)
+
+# train GBM model
+install.packages("gbm")
+library(gbm)
+
+gbm.fit <- gbm(
+  formula = y_price ~.,
+  data = train,
+  distribution = "gaussian",
+  n.trees = 10000,
+  interaction.depth = 1,
+  shrinkage = 0.001,
+  cv.folds = 10,
+  n.cores = NULL, # will use all cores by default
+  verbose = FALSE
+)
+
+sqrt(min(gbm.fit$cv.error))
+which.min(gbm.fit$cv.error)
+gbm.perf(gbm.fit, method = "cv")
+
+
+
+
+#measuring the improtance of each variable
+par(mar = c(5, 8, 1, 1))
+summary(
+  gbm.fit, 
+  cBars = 10,
+  method = relative.influence, # also can use permutation.test.gbm
+  las = 2
+)
+
+
+#
+
+summary(gbm.fit)
+predictgbmfit <- predict(gbm.fit, newdata = test)
+
+plot(predictgbmfit, test$y_price)
+abline(a = 0,
+       b = 1,
+       col = "red",
+       lwd = 5)
+
+
+#model performance
+
+model_gbmperformance <- data.frame(RMSE=RMSE(predictgbmfit, test$y_price),
+                                   Rsquared=R2(predictgbmfit, test$y_price))
+
+model_gbmperformance
+
+caret::RMSE(predictgbmfit, test$y_price)
+
+caret::R2(predictgbmfit, test$y_price)
+
+
+
+
+#compare model performances
+
+
+comparemodels <- matrix(c(model1performance$RMSE, model1performance$Rsquared,
+                          model_lmperformance$RMSE, model_lmperformance$Rsquared, 
+                          model_ridgeperformance$RMSE, model_ridgeperformance$Rsquared,
+                          model_gbmperformance$RMSE, model_gbmperformance$Rsquared), ncol = 2, byrow = TRUE)
+#column names and row names
+
+colnames(comparemodels) <- c("RMSE", "R-Squared")
+rownames(comparemodels) <- c("Lasso Regression", "OLS Linear Regression", "Ridge Regression", "Gradient Boosted Regression")
+
+
+
+
+
